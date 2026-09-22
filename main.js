@@ -4,11 +4,11 @@ dns.setDefaultResultOrder('ipv4first');
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
-  log(`end=${process.env.APPWRITE_FUNCTION_API_ENDPOINT}`);
-  log(`pr=${process.env.APPWRITE_FUNCTION_PROJECT_ID}`);
-  log(`hasKey=${!!process.env.APPWRITE_API_KEY}`);
+  const endpoint = 'https://cloud.appwrite.io/v1';
 
-  const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
+  log(`Connecting via: ${endpoint}`);
+  log(`Project: ${process.env.APPWRITE_FUNCTION_PROJECT_ID}`);
+  log(`Has API Key: ${!!process.env.APPWRITE_API_KEY}`);
 
   const client = new Client()
     .setEndpoint(endpoint)
@@ -36,7 +36,7 @@ module.exports = async ({ req, res, log, error }) => {
   }
 
   let doc;
-  log(`graphId: ${graphId}`);
+  log(`Searching for graphId: ${graphId}`);
   
   try {
     const response = await databases.listDocuments(
@@ -46,14 +46,15 @@ module.exports = async ({ req, res, log, error }) => {
     );
     
     if (response.documents.length === 0) {
+        log('Graph not found in database');
         return res.json({ error: 'graph not found' }, 404);
     }
     doc = response.documents[0];
-    log(`doc found: ${doc.$id}`);
+    log(`Success! Graph doc found: ${doc.$id}`);
   } catch (e) {
-    // В случае ошибки, сама ошибка будет выведена во вкладку "Errors" в консоли
-    error(`listDocuments failed: ${e.message}`);
-    return res.json({ error: 'database error on read' }, 500);
+    log(`CRITICAL ERROR ON READ: ${e.message}`);
+    error(`Database read error: ${e.message}`);
+    return res.json({ error: 'database error on read', details: e.message }, 500);
   }
 
   if (doc.owner !== callerUserId) {
@@ -81,10 +82,11 @@ module.exports = async ({ req, res, log, error }) => {
       { collaborators: JSON.stringify(collaborators) },
       permissions
     );
-    log(`Successfully updated doc: ${updated.$id}`);
+    log(`Successfully updated collaborators for: ${updated.$id}`);
     return res.json({ success: true, document: updated });
   } catch (e) {
-    error(`updateDocument failed: ${e.message}`);
-    return res.json({ error: 'update failed' }, 500);
+    log(`CRITICAL ERROR ON UPDATE: ${e.message}`);
+    error(`Database update error: ${e.message}`);
+    return res.json({ error: 'update failed', details: e.message }, 500);
   }
 };
