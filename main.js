@@ -29,12 +29,13 @@ module.exports = async ({ req, res, log, error }) => {
   }
 
   let doc;
+  console.log('graphId',graphId)
   try {
     // doc = await databases.getDocument(databaseId, collectionId, graphId);
     const doc = await databases.listDocuments(
         databaseId,
         collectionId,
-        [Query.equal('$id', id), Query.limit(1)],
+        [Query.equal('$id', graphId), Query.limit(1)],
     );
     console.log('doc',doc);
   } catch (e) {
