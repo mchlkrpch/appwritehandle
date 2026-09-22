@@ -1,14 +1,17 @@
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
-  // Выводим логи используя встроенный метод log() внутри контекста выполнения
-  log(`endpoint=${process.env.APPWRITE_FUNCTION_API_ENDPOINT}`);
-  log(`project=${process.env.APPWRITE_FUNCTION_PROJECT_ID}`);
+  log(`end=${process.env.APPWRITE_FUNCTION_API_ENDPOINT}`);
+  log(`pr=${process.env.APPWRITE_FUNCTION_PROJECT_ID}`);
   log(`hasKey=${!!process.env.APPWRITE_API_KEY}`);
 
-  // Используем системные переменные окружения, которые дает сам Appwrite
+  const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
+
   const client = new Client()
-    .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT) // Внутренний роутинг
+    .setEndpoint(endpoint)
     .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
 
@@ -21,7 +24,6 @@ module.exports = async ({ req, res, log, error }) => {
 
   let body;
   try {
-    // В Appwrite v1.4+ тело запроса лежит в req.bodyRaw
     body = JSON.parse(req.bodyRaw || '{}');
   } catch (e) {
     return res.json({ error: 'invalid body' }, 400);
@@ -49,7 +51,8 @@ module.exports = async ({ req, res, log, error }) => {
     doc = response.documents[0];
     log(`doc found: ${doc.$id}`);
   } catch (e) {
-    error(`getDocument failed: ${e.message}`);
+    // В случае ошибки, сама ошибка будет выведена во вкладку "Errors" в консоли
+    error(`listDocuments failed: ${e.message}`);
     return res.json({ error: 'database error on read' }, 500);
   }
 
@@ -78,6 +81,7 @@ module.exports = async ({ req, res, log, error }) => {
       { collaborators: JSON.stringify(collaborators) },
       permissions
     );
+    log(`Successfully updated doc: ${updated.$id}`);
     return res.json({ success: true, document: updated });
   } catch (e) {
     error(`updateDocument failed: ${e.message}`);
