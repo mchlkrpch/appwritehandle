@@ -2,8 +2,8 @@ const { Client, Databases, Permission, Role } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
   const client = new Client()
-    .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT)
-    .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
+    .setEndpoint('https://fra.cloud.appwrite.io/v1')
+    .setProject('69baae7d0010fa0c541d')
     .setKey(process.env.APPWRITE_API_KEY);
 
   const databases = new Databases(client);
