@@ -1,11 +1,15 @@
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
-console.log(`endpoint=${process.env.APPWRITE_FUNCTION_API_ENDPOINT}`);
-console.log(`project=${process.env.APPWRITE_FUNCTION_PROJECT_ID}`);
-console.log(`hasKey=${!!process.env.APPWRITE_API_KEY}`);
+
 module.exports = async ({ req, res, log, error }) => {
+  // Выводим логи используя встроенный метод log() внутри контекста выполнения
+  log(`endpoint=${process.env.APPWRITE_FUNCTION_API_ENDPOINT}`);
+  log(`project=${process.env.APPWRITE_FUNCTION_PROJECT_ID}`);
+  log(`hasKey=${!!process.env.APPWRITE_API_KEY}`);
+
+  // Используем системные переменные окружения, которые дает сам Appwrite
   const client = new Client()
-    .setEndpoint('https://fra.cloud.appwrite.io/v1')
-    .setProject('69baae7d0010fa0c541d')
+    .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT) // Внутренний роутинг
+    .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
 
   const databases = new Databases(client);
@@ -17,6 +21,7 @@ module.exports = async ({ req, res, log, error }) => {
 
   let body;
   try {
+    // В Appwrite v1.4+ тело запроса лежит в req.bodyRaw
     body = JSON.parse(req.bodyRaw || '{}');
   } catch (e) {
     return res.json({ error: 'invalid body' }, 400);
@@ -29,18 +34,23 @@ module.exports = async ({ req, res, log, error }) => {
   }
 
   let doc;
-  console.log('graphId',graphId)
+  log(`graphId: ${graphId}`);
+  
   try {
-    // doc = await databases.getDocument(databaseId, collectionId, graphId);
-    const doc = await databases.listDocuments(
+    const response = await databases.listDocuments(
         databaseId,
         collectionId,
-        [Query.equal('$id', graphId), Query.limit(1)],
+        [Query.equal('$id', graphId), Query.limit(1)]
     );
-    console.log('doc',doc);
+    
+    if (response.documents.length === 0) {
+        return res.json({ error: 'graph not found' }, 404);
+    }
+    doc = response.documents[0];
+    log(`doc found: ${doc.$id}`);
   } catch (e) {
     error(`getDocument failed: ${e.message}`);
-    return res.json({ error: 'graph not found' }, 404);
+    return res.json({ error: 'database error on read' }, 500);
   }
 
   if (doc.owner !== callerUserId) {
