@@ -3,12 +3,28 @@ const http = require('http');
 const dns = require('dns');
 
 dns.setDefaultResultOrder('ipv4first');
+
 global.fetch = (url, options = {}) => {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
+    let reqHeaders = {};
+    if (options.headers) {
+      if (typeof options.headers.forEach === 'function') {
+        options.headers.forEach((value, key) => {
+          reqHeaders[key] = value;
+        });
+      } else if (typeof options.headers.entries === 'function') {
+        for (const [key, value] of options.headers.entries()) {
+          reqHeaders[key] = value;
+        }
+      } else {
+        reqHeaders = { ...options.headers };
+      }
+    }
+
     const req = lib.request(url, {
       method: options.method || 'GET',
-      headers: options.headers || {},
+      headers: reqHeaders,
     }, (res) => {
       let data = [];
       res.on('data', chunk => data.push(chunk));
@@ -39,7 +55,8 @@ global.fetch = (url, options = {}) => {
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
-  log(`--- EXECUTING WITH FETCH POLYFILL ---`);
+  log(`--- EXECUTING WITH FIXED HEADERS POLYFILL ---`);
+  
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
   
   const client = new Client()
