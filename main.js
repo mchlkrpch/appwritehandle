@@ -1,11 +1,7 @@
 const https = require('https');
 const http = require('http');
-const dns = require('dns');
 
-// 1. Указываем классическому HTTP/HTTPS модулю использовать IPv4
-dns.setDefaultResultOrder('ipv4first');
-
-// 2. Возвращаем ваш полифил, так как встроенный fetch в Node 18 игнорирует настройку DNS выше
+// 1. Полифил для обхода проблемы с IPv6 в Node 18
 global.fetch = (url, options = {}) => {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
@@ -55,10 +51,20 @@ module.exports = async ({ req, res, log, error }) => {
   
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
   
+  // Инициализируем клиента
   const client = new Client()
     .setEndpoint(endpoint)
     .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-    .setKey(process.env.APPWRITE_API_KEY);
+    .setKey((process.env.APPWRITE_API_KEY || '').trim());
+
+  // 2. ГЛАВНЫЙ ФИКС: Жестко удаляем автоматически подтянутый JWT из заголовков.
+  // Это заставит сервер Appwrite использовать API ключ, а не идентификатор функции.
+  Object.keys(client.headers).forEach(key => {
+    if (key.toLowerCase() === 'x-appwrite-jwt') {
+        delete client.headers[key];
+        log('Auto-injected JWT removed from headers to force API Key usage.');
+    }
+  });
 
   const databases = new Databases(client);
 
