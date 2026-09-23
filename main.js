@@ -1,56 +1,9 @@
-const https = require('https');
-const http = require('http');
-const dns = require('dns');
-
-dns.setDefaultResultOrder('ipv4first');
-global.fetch = (url, options = {}) => {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    
-    let reqHeaders = {};
-    if (options.headers) {
-      if (typeof options.headers.forEach === 'function') {
-        options.headers.forEach((value, key) => reqHeaders[key] = value);
-      } else if (typeof options.headers.entries === 'function') {
-        for (const [key, value] of options.headers.entries()) reqHeaders[key] = value;
-      } else {
-        reqHeaders = { ...options.headers };
-      }
-    }
-
-    const req = lib.request(url, {
-      method: options.method || 'GET',
-      headers: reqHeaders,
-    }, (res) => {
-      let data = [];
-      res.on('data', chunk => data.push(chunk));
-      res.on('end', () => {
-        const bodyStr = Buffer.concat(data).toString('utf8');
-        resolve({
-          ok: res.statusCode >= 200 && res.statusCode < 300,
-          status: res.statusCode,
-          statusText: res.statusMessage,
-          headers: { get: (name) => res.headers[name.toLowerCase()] },
-          json: async () => JSON.parse(bodyStr),
-          text: async () => bodyStr,
-          arrayBuffer: async () => Buffer.concat(data)
-        });
-      });
-    });
-    
-    req.on('error', reject);
-    req.setTimeout(8000, () => req.destroy(new Error('Polyfill fetch timeout')));
-    if (options.body) req.write(options.body);
-    req.end();
-  });
-};
-
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
-  log(`--- 2EXECUTING FINAL JWT FIX ---`);
-  delete process.env.APPWRITE_FUNCTION_JWT;
-  
+  log(`--- EXECUTING GRAPH COLLABORATORS UPDATE ---`);
+  log(`Is API KEY present?: ${!!process.env.APPWRITE_API_KEY}`);
+
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
   
   const client = new Client()
