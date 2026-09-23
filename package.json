@@ -1,8 +1,9 @@
 {
   "name": "update-graph-collaborators",
   "version": "1.0.0",
-  "main": "main.js",
+  "type": "commonjs",
+  "main": "src/main.js",
   "dependencies": {
-    "node-appwrite": "^13.0.0"
+    "node-appwrite": "^14.0.0"
   }
 }
