@@ -55,7 +55,7 @@ global.fetch = (url, options = {}) => {
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
-  log(`--- EXECUTING WITH FIXED HEADERS POLYFILL ---`);
+  log(`--- 1EXECUTING WITH FIXED HEADERS POLYFILL ---`);
   
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
   
