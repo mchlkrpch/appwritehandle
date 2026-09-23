@@ -55,7 +55,9 @@ module.exports = async ({ req, res, log, error }) => {
   const client = new Client()
     .setEndpoint(endpoint)
     .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-    .setKey((process.env.APPWRITE_API_KEY || '').trim());
+    .setKey((process.env.MY_CUSTOM_API_KEY || '').trim());
+
+  console.log(process.env.MY_CUSTOM_API_KEY);
 
   // 2. ГЛАВНЫЙ ФИКС: Жестко удаляем автоматически подтянутый JWT из заголовков.
   // Это заставит сервер Appwrite использовать API ключ, а не идентификатор функции.
