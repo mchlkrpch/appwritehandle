@@ -2,26 +2,19 @@ const https = require('https');
 const http = require('http');
 const dns = require('dns');
 
-// 1. Используем IPv4 для DNS-резолвинга
 dns.setDefaultResultOrder('ipv4first');
 
-// 2. Полифил fetch — обязателен, иначе на некоторых регионах Appwrite Cloud
-// встроенный undici fetch зависает на IPv6 и функция падает по таймауту (408)
 global.fetch = (url, options = {}) => {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
-
     let reqHeaders = {};
     if (options.headers) {
       if (typeof options.headers.forEach === 'function') {
         options.headers.forEach((value, key) => reqHeaders[key] = value);
-      } else if (typeof options.headers.entries === 'function') {
-        for (const [key, value] of options.headers.entries()) reqHeaders[key] = value;
       } else {
         reqHeaders = { ...options.headers };
       }
     }
-
     const req = lib.request(url, {
       method: options.method || 'GET',
       headers: reqHeaders,
@@ -41,7 +34,6 @@ global.fetch = (url, options = {}) => {
         });
       });
     });
-
     req.on('error', reject);
     req.setTimeout(8000, () => req.destroy(new Error('Polyfill fetch timeout')));
     if (options.body) req.write(options.body);
@@ -49,19 +41,29 @@ global.fetch = (url, options = {}) => {
   });
 };
 
-const { Client, TablesDB, Permission, Role, Query } = require('node-appwrite');
+const ENDPOINT = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://fra.cloud.appwrite.io/v1';
+const PROJECT_ID = process.env.APPWRITE_FUNCTION_PROJECT_ID;
+const API_KEY = process.env.APPWRITE_API_KEY;
+
+async function appwriteRequest(method, path, body) {
+  const res = await fetch(`${ENDPOINT}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Appwrite-Project': PROJECT_ID,
+      'X-Appwrite-Key': API_KEY,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || `HTTP ${res.status}`);
+  }
+  return json;
+}
 
 module.exports = async ({ req, res, log, error }) => {
   log(`--- EXECUTING GRAPH COLLABORATORS UPDATE ---`);
-
-  const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://fra.cloud.appwrite.io/v1';
-
-  const client = new Client()
-    .setEndpoint(endpoint)
-    .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-    .setKey(process.env.APPWRITE_API_KEY);
-
-  const tablesDB = new TablesDB(client);
 
   const callerUserId = req.headers['x-appwrite-user-id'];
   if (!callerUserId) {
@@ -75,7 +77,6 @@ module.exports = async ({ req, res, log, error }) => {
     return res.json({ error: 'invalid body' }, 400);
   }
 
-  // databaseId и tableId — теперь это ID базы и ID таблицы (бывшая collection)
   const { databaseId, tableId, graphId, collaborators } = body;
 
   if (!databaseId || !tableId || !graphId || !collaborators) {
@@ -86,17 +87,17 @@ module.exports = async ({ req, res, log, error }) => {
   log(`Searching for graphId (rowId): ${graphId}`);
 
   try {
-    const response = await tablesDB.listRows(
-      databaseId,
-      tableId,
-      [Query.equal('$id', graphId), Query.limit(1)]
+    const query = encodeURIComponent(JSON.stringify({ method: 'equal', attribute: '$id', values: [graphId] }));
+    const listResp = await appwriteRequest(
+      'GET',
+      `/tablesdb/${databaseId}/tables/${tableId}/rows?queries[]=${query}&queries[]=${encodeURIComponent(JSON.stringify({ method: 'limit', values: [1] }))}`
     );
 
-    if (response.rows.length === 0) {
+    if (!listResp.rows || listResp.rows.length === 0) {
       log('Graph not found in database');
       return res.json({ error: 'graph not found' }, 404);
     }
-    row = response.rows[0];
+    row = listResp.rows[0];
     log(`Success! Graph row found: ${row.$id}`);
   } catch (e) {
     log(`CRITICAL ERROR ON READ: ${e.message}`);
@@ -109,25 +110,26 @@ module.exports = async ({ req, res, log, error }) => {
   }
 
   const permissions = [
-    Permission.read(Role.any()),
-    Permission.update(Role.user(row.owner)),
-    Permission.delete(Role.user(row.owner)),
+    `read("any")`,
+    `update("user:${row.owner}")`,
+    `delete("user:${row.owner}")`,
   ];
 
   Object.entries(collaborators).forEach(([userId, role]) => {
     if (userId === row.owner) return;
     if (role === 'editor') {
-      permissions.push(Permission.update(Role.user(userId)));
+      permissions.push(`update("user:${userId}")`);
     }
   });
 
   try {
-    const updated = await tablesDB.updateRow(
-      databaseId,
-      tableId,
-      graphId,
-      { collaborators: JSON.stringify(collaborators) },
-      permissions
+    const updated = await appwriteRequest(
+      'PATCH',
+      `/tablesdb/${databaseId}/tables/${tableId}/rows/${graphId}`,
+      {
+        data: { collaborators: JSON.stringify(collaborators) },
+        permissions,
+      }
     );
     log(`Successfully updated collaborators for: ${updated.$id}`);
     return res.json({ success: true, document: updated });
