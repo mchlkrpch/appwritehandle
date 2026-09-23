@@ -1,6 +1,52 @@
-// Возвращаем фикс для IPv6, чтобы встроенный fetch работал корректно
+const https = require('https');
+const http = require('http');
 const dns = require('dns');
+
+// 1. Указываем классическому HTTP/HTTPS модулю использовать IPv4
 dns.setDefaultResultOrder('ipv4first');
+
+// 2. Возвращаем ваш полифил, так как встроенный fetch в Node 18 игнорирует настройку DNS выше
+global.fetch = (url, options = {}) => {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    
+    let reqHeaders = {};
+    if (options.headers) {
+      if (typeof options.headers.forEach === 'function') {
+        options.headers.forEach((value, key) => reqHeaders[key] = value);
+      } else if (typeof options.headers.entries === 'function') {
+        for (const [key, value] of options.headers.entries()) reqHeaders[key] = value;
+      } else {
+        reqHeaders = { ...options.headers };
+      }
+    }
+
+    const req = lib.request(url, {
+      method: options.method || 'GET',
+      headers: reqHeaders,
+    }, (res) => {
+      let data = [];
+      res.on('data', chunk => data.push(chunk));
+      res.on('end', () => {
+        const bodyStr = Buffer.concat(data).toString('utf8');
+        resolve({
+          ok: res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode,
+          statusText: res.statusMessage,
+          headers: { get: (name) => res.headers[name.toLowerCase()] || null },
+          json: async () => JSON.parse(bodyStr),
+          text: async () => bodyStr,
+          arrayBuffer: async () => Buffer.concat(data)
+        });
+      });
+    });
+    
+    req.on('error', reject);
+    req.setTimeout(8000, () => req.destroy(new Error('Polyfill fetch timeout')));
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+};
 
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
