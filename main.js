@@ -1,142 +1,49 @@
-const https = require('https');
-const http = require('http');
+import { Client, Databases } from 'node-appwrite';
 
-// Полифил для обхода проблемы с IPv6 в Node 18
-global.fetch = (url, options = {}) => {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    
-    let reqHeaders = {};
-    if (options.headers) {
-      if (typeof options.headers.forEach === 'function') {
-        options.headers.forEach((value, key) => reqHeaders[key] = value);
-      } else if (typeof options.headers.entries === 'function') {
-        for (const [key, value] of options.headers.entries()) reqHeaders[key] = value;
-      } else {
-        reqHeaders = { ...options.headers };
-      }
-    }
-
-    const req = lib.request(url, {
-      method: options.method || 'GET',
-      headers: reqHeaders,
-    }, (res) => {
-      let data = [];
-      res.on('data', chunk => data.push(chunk));
-      res.on('end', () => {
-        const bodyStr = Buffer.concat(data).toString('utf8');
-        resolve({
-          ok: res.statusCode >= 200 && res.statusCode < 300,
-          status: res.statusCode,
-          statusText: res.statusMessage,
-          headers: { get: (name) => res.headers[name.toLowerCase()] || null },
-          json: async () => JSON.parse(bodyStr),
-          text: async () => bodyStr,
-          arrayBuffer: async () => Buffer.concat(data)
-        });
-      });
-    });
-    
-    req.on('error', reject);
-    req.setTimeout(8000, () => req.destroy(new Error('Polyfill fetch timeout')));
-    if (options.body) req.write(options.body);
-    req.end();
-  });
-};
-
-const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
-
-module.exports = async ({ req, res, log, error }) => {
-  log(`--- EXECUTING GRAPH COLLABORATORS UPDATE ---`);
-  
-  const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
-  // Читаем правильный ключ (убедитесь, что переменная называется APPWRITE_API_KEY)
-  const apiKey = (process.env.APPWRITE_API_KEY || '').trim();
-  
+export default async ({ req, res, log, error }) => {
+  // 1. Инициализация клиента Appwrite от лица сервера
   const client = new Client()
-    .setEndpoint(endpoint)
+    .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://fra.cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-    .setKey(apiKey);
-
-  // ЖЕСТКИЙ ФИКС: Удаляем системный JWT функции, чтобы Appwrite смотрел ТОЛЬКО на API ключ
-  Object.keys(client.headers).forEach(key => {
-    if (key.toLowerCase() === 'x-appwrite-jwt') {
-        delete client.headers[key];
-    }
-  });
+    .setKey(process.env.APPWRITE_API_KEY);
 
   const databases = new Databases(client);
 
-  const callerUserId = req.headers['x-appwrite-user-id'];
-  if (!callerUserId) {
-    return res.json({ error: 'unauthorized' }, 401);
-  }
-
-  let body;
   try {
-    body = JSON.parse(req.bodyRaw || '{}');
-  } catch (e) {
-    return res.json({ error: 'invalid body' }, 400);
-  }
-
-  const { databaseId, collectionId, graphId, collaborators } = body;
-
-  if (!databaseId || !collectionId || !graphId || !collaborators) {
-    return res.json({ error: 'missing fields' }, 400);
-  }
-
-  let doc;
-  log(`Searching for graphId: ${graphId}`);
-  
-  try {
-    const response = await databases.listDocuments(
-        databaseId,
-        collectionId,
-        [Query.equal('$id', graphId), Query.limit(1)]
-    );
-    
-    if (response.documents.length === 0) {
-        log('Graph not found in database');
-        return res.json({ error: 'graph not found' }, 404);
+    // 2. Получение данных из тела запроса (body)
+    // В Appwrite body передается как строка, если мы отправляем JSON
+    let payload = {};
+    if (req.body) {
+      payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     }
-    doc = response.documents[0];
-    log(`Success! Graph doc found: ${doc.$id}`);
-  } catch (e) {
-    log(`CRITICAL ERROR ON READ: ${e.message}`);
-    error(`Database read error: ${e.message}`);
-    return res.json({ error: 'database error on read', details: e.message }, 500);
-  }
 
-  if (doc.owner !== callerUserId) {
-    return res.json({ error: 'forbidden: only owner can manage collaborators' }, 403);
-  }
+    const { databaseId, collectionId, documentId } = payload;
 
-  const permissions = [
-    Permission.read(Role.any()),
-    Permission.update(Role.user(doc.owner)),
-    Permission.delete(Role.user(doc.owner)),
-  ];
-
-  Object.entries(collaborators).forEach(([userId, role]) => {
-    if (userId === doc.owner) return;
-    if (role === 'editor') {
-      permissions.push(Permission.update(Role.user(userId)));
+    if (!databaseId || !collectionId || !documentId) {
+      error("Missing required parameters");
+      return res.json({ error: "databaseId, collectionId, and documentId are required" }, 400);
     }
-  });
 
-  try {
-    const updated = await databases.updateDocument(
+    // 3. Чтение документа из базы
+    const document = await databases.getDocument(
       databaseId,
       collectionId,
-      graphId,
-      { collaborators: JSON.stringify(collaborators) },
-      permissions
+      documentId
     );
-    log(`Successfully updated collaborators for: ${updated.$id}`);
-    return res.json({ success: true, document: updated });
-  } catch (e) {
-    log(`CRITICAL ERROR ON UPDATE: ${e.message}`);
-    error(`Database update error: ${e.message}`);
-    return res.json({ error: 'update failed', details: e.message }, 500);
+
+    log(`Document ${documentId} fetched successfully`);
+
+    // 4. Возвращаем документ на фронтенд
+    return res.json({
+      success: true,
+      document: document
+    });
+
+  } catch (err) {
+    error(`Error fetching document: ${err.message}`);
+    return res.json({ 
+      success: false, 
+      error: err.message 
+    }, 500);
   }
 };
