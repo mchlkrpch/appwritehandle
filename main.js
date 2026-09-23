@@ -3,20 +3,16 @@ const http = require('http');
 const dns = require('dns');
 
 dns.setDefaultResultOrder('ipv4first');
-
 global.fetch = (url, options = {}) => {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
+    
     let reqHeaders = {};
     if (options.headers) {
       if (typeof options.headers.forEach === 'function') {
-        options.headers.forEach((value, key) => {
-          reqHeaders[key] = value;
-        });
+        options.headers.forEach((value, key) => reqHeaders[key] = value);
       } else if (typeof options.headers.entries === 'function') {
-        for (const [key, value] of options.headers.entries()) {
-          reqHeaders[key] = value;
-        }
+        for (const [key, value] of options.headers.entries()) reqHeaders[key] = value;
       } else {
         reqHeaders = { ...options.headers };
       }
@@ -44,10 +40,7 @@ global.fetch = (url, options = {}) => {
     
     req.on('error', reject);
     req.setTimeout(8000, () => req.destroy(new Error('Polyfill fetch timeout')));
-    
-    if (options.body) {
-      req.write(options.body);
-    }
+    if (options.body) req.write(options.body);
     req.end();
   });
 };
@@ -55,7 +48,8 @@ global.fetch = (url, options = {}) => {
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
-  log(`--- 1EXECUTING WITH FIXED HEADERS POLYFILL ---`);
+  log(`--- 2EXECUTING FINAL JWT FIX ---`);
+  delete process.env.APPWRITE_FUNCTION_JWT;
   
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
   
