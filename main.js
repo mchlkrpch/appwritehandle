@@ -1,9 +1,12 @@
+// Возвращаем фикс для IPv6, чтобы встроенный fetch работал корректно
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+
 const { Client, Databases, Permission, Role, Query } = require('node-appwrite');
 
 module.exports = async ({ req, res, log, error }) => {
   log(`--- EXECUTING GRAPH COLLABORATORS UPDATE ---`);
-  log(`Is API KEY present?: ${!!process.env.APPWRITE_API_KEY}`);
-
+  
   const endpoint = process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1';
   
   const client = new Client()
