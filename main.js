@@ -124,6 +124,7 @@ module.exports = async ({ req, res, log, error }) => {
     error(`Database read error: ${e.message}`);
     return res.json({ error: 'database error on read', details: e.message }, 500);
   }
+  log(`DEBUG: row.owner=${row.owner}, callerUserId=${callerUserId}, collaborators=${row.collaborators}`);
 
   // ── Определяем правила доступа для этой таблицы ──
   const rules = TABLE_RULES[tableId];
