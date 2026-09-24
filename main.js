@@ -60,12 +60,30 @@ async function appwriteRequest(method, path, body) {
   return json;
 }
 
-// Поля, которые разрешено менять через эту функцию.
-// Даже если клиент пришлёт что-то ещё (например, collaborators, owner) — будет проигнорировано.
-const ALLOWED_FIELDS = ['content', 'name', 'groups'];
+// ── Конфигурация правил для разных таблиц ──
+// Если таблица не описана здесь — применяется дефолтное правило
+// "разрешено редактировать только собственный документ (id === callerUserId)".
+const TABLE_RULES = {
+  graphs: {
+    // Поля, которые может менять и owner, и editor
+    sharedFields: ['content', 'name', 'groups'],
+    // Поля, которые может менять ТОЛЬКО owner
+    ownerOnlyFields: ['collaborators'],
+    // Проверка прав на основе полей документа
+    checkAccess: (row, callerUserId) => {
+      const isOwner = row.owner === callerUserId;
+      let collaborators = {};
+      try {
+        collaborators = row.collaborators ? JSON.parse(row.collaborators) : {};
+      } catch (e) { /* ignore */ }
+      const isEditor = collaborators[callerUserId] === 'editor';
+      return { isOwner, isEditor };
+    },
+  },
+};
 
 module.exports = async ({ req, res, log, error }) => {
-  log(`--- EXECUTING GRAPH CONTENT UPDATE ---`);
+  log(`--- EXECUTING DOCUMENT UPDATE ---`);
 
   const callerUserId = req.headers['x-appwrite-user-id'];
   if (!callerUserId) {
@@ -79,29 +97,17 @@ module.exports = async ({ req, res, log, error }) => {
     return res.json({ error: 'invalid body' }, 400);
   }
 
-  const { databaseId, tableId, graphId, ...rest } = body;
+  const { databaseId, tableId, id, data } = body;
 
-  if (!databaseId || !tableId || !graphId) {
+  if (!databaseId || !tableId || !id || !data || typeof data !== 'object') {
+    log(`Missing fields. Received: ${JSON.stringify(body)}`);
     return res.json({ error: 'missing fields' }, 400);
   }
 
-  // Строим payload только из разрешённых полей — жёсткий whitelist.
-  const updateData = {};
-  for (const key of ALLOWED_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(rest, key)) {
-      updateData[key] = rest[key];
-    }
-  }
-
-  if (Object.keys(updateData).length === 0) {
-    return res.json({ error: 'no allowed fields to update' }, 400);
-  }
-
+  // ── Читаем документ ──
   let row;
-  log(`Searching for graphId (rowId): ${graphId}`);
-
   try {
-    const q1 = encodeURIComponent(JSON.stringify({ method: 'equal', attribute: '$id', values: [graphId] }));
+    const q1 = encodeURIComponent(JSON.stringify({ method: 'equal', attribute: '$id', values: [id] }));
     const q2 = encodeURIComponent(JSON.stringify({ method: 'limit', values: [1] }));
     const listResp = await appwriteRequest(
       'GET',
@@ -109,42 +115,64 @@ module.exports = async ({ req, res, log, error }) => {
     );
 
     if (!listResp.rows || listResp.rows.length === 0) {
-      log('Graph not found in database');
-      return res.json({ error: 'graph not found' }, 404);
+      log('Document not found');
+      return res.json({ error: 'document not found' }, 404);
     }
     row = listResp.rows[0];
-    log(`Success! Graph row found: ${row.$id}`);
   } catch (e) {
     log(`CRITICAL ERROR ON READ: ${e.message}`);
     error(`Database read error: ${e.message}`);
     return res.json({ error: 'database error on read', details: e.message }, 500);
   }
 
-  // ── Проверка прав ──
-  let collaborators = {};
-  try {
-    collaborators = row.collaborators ? JSON.parse(row.collaborators) : {};
-  } catch (e) {
-    collaborators = {};
+  // ── Определяем правила доступа для этой таблицы ──
+  const rules = TABLE_RULES[tableId];
+  const requestedFields = Object.keys(data);
+  const updateData = {};
+
+  if (rules) {
+    const { isOwner, isEditor } = rules.checkAccess(row, callerUserId);
+
+    if (!isOwner && !isEditor) {
+      log(`Forbidden: user ${callerUserId} has no access (owner=${row.owner})`);
+      return res.json({ error: 'forbidden: no edit access' }, 403);
+    }
+
+    for (const field of requestedFields) {
+      const isOwnerOnly = rules.ownerOnlyFields.includes(field);
+      const isShared = rules.sharedFields.includes(field);
+
+      if (isOwnerOnly && !isOwner) {
+        log(`Forbidden: field "${field}" requires owner, caller=${callerUserId}`);
+        return res.json({ error: `forbidden: only owner can change "${field}"` }, 403);
+      }
+      if (!isOwnerOnly && !isShared) {
+        log(`Forbidden: field "${field}" is not editable`);
+        return res.json({ error: `forbidden: field "${field}" is not editable` }, 403);
+      }
+      updateData[field] = data[field];
+    }
+  } else {
+    // ── Дефолтное правило для остальных таблиц: можно менять только свой документ ──
+    if (row.$id !== callerUserId) {
+      log(`Forbidden: user ${callerUserId} tried to edit foreign document ${row.$id} in table ${tableId}`);
+      return res.json({ error: 'forbidden: not your document' }, 403);
+    }
+    Object.assign(updateData, data);
   }
 
-  const isOwner = row.owner === callerUserId;
-  const role = collaborators[callerUserId];
-  const isEditor = role === 'editor';
-
-  if (!isOwner && !isEditor) {
-    log(`Forbidden: user ${callerUserId} has role "${role}" (owner=${row.owner})`);
-    return res.json({ error: 'forbidden: no edit access' }, 403);
+  if (Object.keys(updateData).length === 0) {
+    return res.json({ error: 'no allowed fields to update' }, 400);
   }
 
-  // ── Обновление ──
+  // ── Обновляем ──
   try {
     const updated = await appwriteRequest(
       'PATCH',
-      `/tablesdb/${databaseId}/tables/${tableId}/rows/${graphId}`,
+      `/tablesdb/${databaseId}/tables/${tableId}/rows/${id}`,
       { data: updateData }
     );
-    log(`Successfully updated content for: ${updated.$id}`);
+    log(`Successfully updated document ${updated.$id} in table ${tableId}`);
     return res.json({ success: true, document: updated });
   } catch (e) {
     log(`CRITICAL ERROR ON UPDATE: ${e.message}`);
