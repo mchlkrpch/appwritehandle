@@ -56,14 +56,16 @@ async function appwriteRequest(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json.message || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(json.message || `HTTP ${res.status}`);
   return json;
 }
 
+// Поля, которые разрешено менять через эту функцию.
+// Даже если клиент пришлёт что-то ещё (например, collaborators, owner) — будет проигнорировано.
+const ALLOWED_FIELDS = ['content', 'name', 'groups'];
+
 module.exports = async ({ req, res, log, error }) => {
-  log(`--- EXECUTING GRAPH COLLABORATORS UPDATE ---`);
+  log(`--- EXECUTING GRAPH CONTENT UPDATE ---`);
 
   const callerUserId = req.headers['x-appwrite-user-id'];
   if (!callerUserId) {
@@ -77,20 +79,33 @@ module.exports = async ({ req, res, log, error }) => {
     return res.json({ error: 'invalid body' }, 400);
   }
 
-  const { databaseId, tableId, graphId, collaborators } = body;
+  const { databaseId, tableId, graphId, ...rest } = body;
 
-  if (!databaseId || !tableId || !graphId || !collaborators) {
+  if (!databaseId || !tableId || !graphId) {
     return res.json({ error: 'missing fields' }, 400);
+  }
+
+  // Строим payload только из разрешённых полей — жёсткий whitelist.
+  const updateData = {};
+  for (const key of ALLOWED_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(rest, key)) {
+      updateData[key] = rest[key];
+    }
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    return res.json({ error: 'no allowed fields to update' }, 400);
   }
 
   let row;
   log(`Searching for graphId (rowId): ${graphId}`);
 
   try {
-    const query = encodeURIComponent(JSON.stringify({ method: 'equal', attribute: '$id', values: [graphId] }));
+    const q1 = encodeURIComponent(JSON.stringify({ method: 'equal', attribute: '$id', values: [graphId] }));
+    const q2 = encodeURIComponent(JSON.stringify({ method: 'limit', values: [1] }));
     const listResp = await appwriteRequest(
       'GET',
-      `/tablesdb/${databaseId}/tables/${tableId}/rows?queries[]=${query}&queries[]=${encodeURIComponent(JSON.stringify({ method: 'limit', values: [1] }))}`
+      `/tablesdb/${databaseId}/tables/${tableId}/rows?queries[]=${q1}&queries[]=${q2}`
     );
 
     if (!listResp.rows || listResp.rows.length === 0) {
@@ -105,33 +120,31 @@ module.exports = async ({ req, res, log, error }) => {
     return res.json({ error: 'database error on read', details: e.message }, 500);
   }
 
-  if (row.owner !== callerUserId) {
-    return res.json({ error: 'forbidden: only owner can manage collaborators' }, 403);
+  // ── Проверка прав ──
+  let collaborators = {};
+  try {
+    collaborators = row.collaborators ? JSON.parse(row.collaborators) : {};
+  } catch (e) {
+    collaborators = {};
   }
 
-  const permissions = [
-    `read("any")`,
-    `update("user:${row.owner}")`,
-    `delete("user:${row.owner}")`,
-  ];
+  const isOwner = row.owner === callerUserId;
+  const role = collaborators[callerUserId];
+  const isEditor = role === 'editor';
 
-  Object.entries(collaborators).forEach(([userId, role]) => {
-    if (userId === row.owner) return;
-    if (role === 'editor') {
-      permissions.push(`update("user:${userId}")`);
-    }
-  });
+  if (!isOwner && !isEditor) {
+    log(`Forbidden: user ${callerUserId} has role "${role}" (owner=${row.owner})`);
+    return res.json({ error: 'forbidden: no edit access' }, 403);
+  }
 
+  // ── Обновление ──
   try {
     const updated = await appwriteRequest(
       'PATCH',
       `/tablesdb/${databaseId}/tables/${tableId}/rows/${graphId}`,
-      {
-        data: { collaborators: JSON.stringify(collaborators) },
-        permissions,
-      }
+      { data: updateData }
     );
-    log(`Successfully updated collaborators for: ${updated.$id}`);
+    log(`Successfully updated content for: ${updated.$id}`);
     return res.json({ success: true, document: updated });
   } catch (e) {
     log(`CRITICAL ERROR ON UPDATE: ${e.message}`);
